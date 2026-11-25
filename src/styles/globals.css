@@ -1,0 +1,205 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* ── JC Design System v1.0 ── */
+  --color-ink:        #0B0F0E;
+  --color-surface:    #121917;
+  --color-line:       #1F2B27;
+  --color-txt:        #D7E3DE;
+  --color-muted:      #8FA39B;
+  --color-signal:     #3DDC97;
+  --color-purple:     #B79CFF;
+  --color-warn:       #F2B84B;
+  --color-danger:     #FF6B6B;
+  --color-red-glow:   color-mix(in srgb, #FF6B6B 12%, transparent);
+  --color-blue-glow:  color-mix(in srgb, #3DDC97 8%, transparent);
+
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --font-sans: var(--font-plex), "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --radius-badge: 4px;
+  --radius-btn:   8px;
+  --radius-card:  16px;
+
+  --animate-flicker:    flicker 6s infinite;
+  --animate-node-pulse: node-pulse 1.6s ease-out infinite;
+  --animate-blink:      blink 1s steps(1) infinite;
+}
+
+html,
+body {
+  background: var(--color-ink);
+  color: var(--color-txt);
+}
+
+/* CRT scanlines */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.025) 2px, rgba(0,0,0,0.025) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1 }
+  92% { opacity: 1 }
+  93% { opacity: 0.97 }
+  94% { opacity: 1 }
+}
+
+@keyframes arc-dash { to { stroke-dashoffset: -100 } }
+
+@keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor }
+  50%       { box-shadow: 0 0 0 8px transparent }
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1 }
+  50%, 100% { opacity: 0 }
+}
+
+/* Thin terminal scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 3px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ───────────────────────────────────────────
+   Page grid layouts (Implementation Plan §14 / §19 / §25)
+   + responsive adjustments (§28)
+   ─────────────────────────────────────────── */
+
+.layout-war {
+  display: grid;
+  height: 100%;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  grid-template:
+    "feed globe score" 1fr
+    "feed globe gauge" auto
+    "summary summary summary" 100px
+    / 280px 1fr 260px;
+}
+
+.layout-red {
+  display: grid;
+  height: 100%;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  grid-template:
+    "targets terminal" 1fr
+    "killchain killchain" 112px
+    "lower lower" 240px
+    / 1fr 1fr;
+}
+.layout-red-lower {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  min-height: 0;
+}
+
+.layout-blue {
+  display: grid;
+  min-height: 100%;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  grid-template:
+    "alerts graph graph sectors" minmax(460px, 62vh)
+    "ops    ops   ops   ops"     auto
+    "health health health health" auto
+    "mitre  ir    fw    intel"   400px
+    / 340px 1fr 1fr 320px;
+}
+
+.area-feed     { grid-area: feed; }
+.area-globe    { grid-area: globe; }
+.area-score    { grid-area: score; }
+.area-gauge    { grid-area: gauge; }
+.area-summary  { grid-area: summary; }
+.area-targets  { grid-area: targets; }
+.area-terminal { grid-area: terminal; }
+.area-killchain{ grid-area: killchain; }
+.area-lower    { grid-area: lower; }
+.area-alerts   { grid-area: alerts; }
+.area-graph    { grid-area: graph; }
+.area-sectors  { grid-area: sectors; }
+.area-health   { grid-area: health; }
+.area-ops      { grid-area: ops; }
+.area-mitre    { grid-area: mitre; }
+.area-ir       { grid-area: ir; }
+.area-fw       { grid-area: fw; }
+.area-intel    { grid-area: intel; }
+
+/* Red Team: stack C2 / Payload / Exfil vertically below 1280px */
+@media (max-width: 1279px) {
+  .layout-red {
+    height: auto;
+    min-height: 100%;
+    grid-template:
+      "targets terminal" minmax(420px, 1fr)
+      "killchain killchain" 112px
+      "lower lower" auto
+      / 1fr 1fr;
+  }
+  .layout-red-lower { grid-template-columns: 1fr; }
+  .layout-red-lower > * { min-height: 220px; }
+
+  .layout-blue {
+    grid-template:
+      "graph   graph"   460px
+      "alerts  sectors" 460px
+      "ops     ops"     auto
+      "health  health"  auto
+      "mitre   ir"      300px
+      "fw      intel"   auto
+      / 1fr 1fr;
+  }
+}
+
+/* War Room: hide ThreatLevelGauge below 1024px */
+@media (max-width: 1023px) {
+  .layout-war {
+    grid-template:
+      "feed globe" 1fr
+      "feed score" auto
+      "summary summary" 100px
+      / 260px 1fr;
+  }
+  .area-gauge { display: none; }
+}
+
+/* ── War Room: Leaflet threat map ── */
+.threat-map { font-family: var(--font-mono, ui-monospace, monospace); }
+.threat-map .leaflet-tile-pane { filter: saturate(0.6) brightness(0.95); }
+.threat-map .leaflet-control-attribution {
+  background: rgba(7, 9, 11, 0.7); color: #6b7a86; font-size: 9px;
+}
+.threat-map .leaflet-control-attribution a { color: #8fa0ad; }
+.map-label { background: none; border: none; }
+.map-tag {
+  white-space: nowrap; font-size: 10px; line-height: 1; padding: 3px 6px;
+  border-radius: 4px; background: rgba(7, 9, 11, 0.85); transform: translate(-50%, 10px);
+  width: max-content;
+}
+.map-tag-id { color: #3DDC97; border: 1px solid rgba(61, 220, 151, 0.5); }
+.map-tag-sg { color: #FF6B6B; border: 1px solid rgba(255, 107, 107, 0.5); transform: translate(-50%, -26px); }
+.map-tip.leaflet-tooltip {
+  background: rgba(7, 9, 11, 0.92); color: #d6dde3; border: 1px solid #22303a;
+  font-family: inherit; font-size: 10px; box-shadow: none;
+}
+.map-tip.leaflet-tooltip::before { display: none; }
+@keyframes map-dash { to { stroke-dashoffset: -28; } }
+.map-flow { animation: map-dash 0.9s linear infinite; }
+.map-flow-slow { animation-duration: 1.4s; }
+@keyframes map-pulse { 50% { stroke-opacity: 0.25; stroke-width: 6px; } }
+.map-pulse { animation: map-pulse 1.2s ease-in-out infinite; }
