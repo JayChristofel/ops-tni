@@ -95,6 +95,8 @@ interface RedOpt {
   blue?:  [Severity, string, string]
   /** langkah terakhir fase → menulis satu baris ringkasan ke terminal */
   final?: boolean
+  /** baris-baris terminal kustom per langkah (multi-line output) */
+  termLines?: (t: SGTarget) => [LogPrefix | '', string][]
 }
 
 function redStep(phase: KillPhase, targetId: string, o: RedOpt): OpsStep {
@@ -116,10 +118,16 @@ function redStep(phase: KillPhase, targetId: string, o: RedOpt): OpsStep {
       if (o.extra) Object.assign(patch, o.extra(s, t))
       if (o.blue) Object.assign(patch, blueAlert(s, ...o.blue))
 
+      // multi-line terminal: gunakan termLines jika ada, fallback ke perilaku default
+      const term: [LogPrefix | '', string][] = o.termLines
+        ? o.termLines(t)
+        : o.final
+          ? [['[+]', `${KILL_CHAIN_STEPS[PHASE_INDEX[phase]].label.toUpperCase()} → ${text}`]]
+          : [['[*]', text]]
+
       return {
         patch,
-        // terminal: hanya satu baris per fase, ditulis oleh langkah terakhir fase
-        term: o.final ? [['[+]', `${KILL_CHAIN_STEPS[PHASE_INDEX[phase]].label.toUpperCase()} → ${text}`]] : [],
+        term,
         logs: [{ team: o.team ?? 'RED', prefix: o.prefix, severity: o.sev ?? 'medium', msg: text, techniqueId: o.tech }],
       }
     },
@@ -133,78 +141,271 @@ export function redPhaseSteps(phase: KillPhase, targetId: string): OpsStep[] {
 
 function redPhaseOpts(phase: KillPhase): RedOpt[] {
   const b = (o: RedOpt) => o
+
+  // ── Helper: CVSS skor acak ──
+  const cvss = () => `${randInt(6, 9)}.${randInt(0, 9)}`
+  const cve  = () => pick(CVES)
+
   switch (phase) {
+
+    // ================================================================
+    // PERENCANAAN — Recon
+    // ================================================================
     case 'recon':
       return [
-        b({ id: 'OSINT sweep', prefix: '[*]', gain: 1, tech: 'T1595', mitre: [['T1595'], 2],
-            text: t => `OSINT sweep: subdomain enumeration on ${t.name}` }),
-        b({ id: 'Port scan', prefix: '[+]', gain: 2, tech: 'T1046', mitre: [['T1046'], 2],
-            text: t => `${randInt(12, 40)} hosts discovered · ${randInt(4, 12)} services exposed on ${t.name}` }),
-        b({ id: 'Vuln mapping', prefix: '[#]', team: 'INTEL', gain: 3, tech: 'T1190',
-            text: t => `Vulnerable service identified: ${pick(CVES)} on ${t.name}` }),
+        b({
+          id: 'OSINT sweep', prefix: '[*]', gain: 1, tech: 'T1595', mitre: [['T1595'], 2],
+          text: t => `OSINT sweep: subdomain enumeration on ${t.name}`,
+          termLines: t => [
+            ['[+]', `PERENCANAAN: Tahap Pengintaian dimulai pada ${t.name}`],
+            ['[*]', `OSINT: Mengumpulkan informasi publik target — subdomain, whois, job listings...`],
+            ['[*]', `OSINT: Memindai eksposur media sosial & data bocor pihak ketiga`],
+            ['[*]', `OSINT: Ditemukan ${randInt(3, 8)} subdomain aktif · ${randInt(2, 5)} akun pegawai terekspos`],
+            ['[*]', `OSINT: Teknologi stack teridentifikasi — PHP/Laravel · MySQL · nginx`],
+          ],
+        }),
+        b({
+          id: 'Port scan', prefix: '[+]', gain: 2, tech: 'T1046', mitre: [['T1046'], 2],
+          text: t => `${randInt(12, 40)} hosts discovered · ${randInt(4, 12)} services exposed on ${t.name}`,
+          termLines: t => [
+            ['[*]', `PORT SCAN: Memindai 65535 port TCP/UDP pada ${t.name}...`],
+            ['[*]', `HOSTS: ${randInt(12, 40)} host aktif ditemukan di /24 subnet`],
+            ['[+]', `PORT TERBUKA: 22/ssh · 80/http · 443/https · 8080/http-alt · 3306/mysql · ${randInt(5000, 9999)}/tcp`],
+            ['[!]', `LAYANAN TEREKSPOS: MySQL ${pick(['5.5', '5.7', '8.0'])} (plaintext) · OpenSSH ${pick(['7.2', '7.4', '8.0'])}`],
+            ['[!]', `BANNER GRAB: Apache/2.4.49 · nginx/1.18.0 · vsftpd/3.0.3 · Redis/6.2`],
+          ],
+        }),
+        b({
+          id: 'Vuln mapping', prefix: '[#]', team: 'INTEL', gain: 3, tech: 'T1190',
+          text: t => `Vulnerable service identified: ${cve()} on ${t.name}`,
+          termLines: t => {
+            const c1 = cve(); const c2 = cve()
+            return [
+              ['[!]', `CVE DITEMUKAN: ${c1} (CVSS ${cvss()}) — Eksploitasi publik tersedia`],
+              ['[!]', `CVE DITEMUKAN: ${c2} (CVSS ${cvss()}) — Patch belum diterapkan pada ${t.name}`],
+              ['[!]', `VULN: Autentikasi default terdeteksi pada port 8080 · admin:admin`],
+              ['[+]', `MITRE T1595: Active Scanning — TERKONFIRMASI`],
+              ['[+]', `MITRE T1046: Network Service Discovery — TERKONFIRMASI`],
+              ['[+]', `MITRE T1190: Exploit Public-Facing Application — TERIDENTIFIKASI`],
+              ['[+]', `✓ STATUS: RECON SELESAI | ${t.name} rentan · sasaran penguasaan +${randInt(4, 8)}%`],
+            ]
+          },
+        }),
       ]
+
+    // ================================================================
+    // PERSIAPAN — Weaponize
+    // ================================================================
     case 'weaponize':
       return [
-        b({ id: 'Build payload', prefix: '[*]', gain: 2, tech: 'T1587',
-            text: t => `Building payload against fingerprinted stack of ${t.name}` }),
-        b({ id: 'Obfuscate', prefix: '[+]', gain: 1, tech: 'T1027',
-            text: () => 'Obfuscation pass complete · AV score 2/68',
-            extra: s => {
-              let n = 0
-              return { payloads: s.payloads.map(p => (p.status === 'AVAILABLE' && n++ < 2 ? { ...p, status: 'LOADED' as const } : p)) }
-            } }),
+        b({
+          id: 'Build payload', prefix: '[*]', gain: 2, tech: 'T1587',
+          text: t => `Building payload against fingerprinted stack of ${t.name}`,
+          termLines: t => [
+            ['[+]', `PERSIAPAN: Tahap Persenjataan dimulai terhadap ${t.name}`],
+            ['[*]', `PAYLOAD BUILD: Membangun exploit berdasarkan fingerprint stack target`],
+            ['[*]', `ENCODER: Menerapkan XOR encoding 256-bit + polymorphic shellcode`],
+            ['[*]', `BUILDER: Mengompilasi stage-1 dropper (${randInt(16, 48)}KB) · stage-2 RAT (${randInt(80, 200)}KB)`],
+            ['[*]', `SANDBOX TEST: Eksekusi di lingkungan VM — perilaku normal terkonfirmasi`],
+          ],
+        }),
+        b({
+          id: 'Obfuscate', prefix: '[+]', gain: 1, tech: 'T1027',
+          text: () => 'Obfuscation pass complete · AV score 2/68',
+          extra: s => {
+            let n = 0
+            return { payloads: s.payloads.map(p => (p.status === 'AVAILABLE' && n++ < 2 ? { ...p, status: 'LOADED' as const } : p)) }
+          },
+          termLines: () => [
+            ['[*]', `AV EVASION: Menjalankan obfuscation multi-layer (string enc + control flow flat)`],
+            ['[*]', `AV TEST: Windows Defender — BYPASS ✓`],
+            ['[*]', `AV TEST: CrowdStrike Falcon — BYPASS ✓`],
+            ['[*]', `AV TEST: Kaspersky — BYPASS ✓`],
+            ['[+]', `AV SCORE: 2/68 engine terdeteksi (aman untuk deployment)`],
+            ['[+]', `PAYLOAD LOADED: Siap untuk pengiriman · digital signature dipalsukan`],
+            ['[+]', `✓ STATUS: WEAPONIZATION SELESAI | Senjata siber operasional`],
+          ],
+        }),
       ]
+
+    // ================================================================
+    // PELAKSANAAN — Deliver
+    // ================================================================
     case 'deliver':
       return [
-        b({ id: 'Stage lure', prefix: '[*]', gain: 2, tech: 'T1566',
-            text: t => `Staging lure for ${t.name} · watering-hole host online` }),
-        b({ id: 'Lure opened', prefix: '[+]', gain: 4, tech: 'T1566', mitre: [['T1566'], 3],
-            text: () => `${randInt(2, 5)} recipients opened lure · callback received`,
-            extra: s => {
-              let done = false
-              return { payloads: s.payloads.map(p => (!done && p.status === 'LOADED' ? ((done = true), { ...p, status: 'DEPLOYED' as const }) : p)) }
-            },
-            blue: ['medium', 'Spear phishing delivered to {asset}', 'MAIL-3101'] }),
+        b({
+          id: 'Stage lure', prefix: '[*]', gain: 2, tech: 'T1566',
+          text: t => `Staging lure for ${t.name} · watering-hole host online`,
+          termLines: t => [
+            ['[+]', `PELAKSANAAN: Tahap Pengiriman dimulai terhadap ${t.name}`],
+            ['[*]', `LURE STAGING: Menyiapkan umpan spear phishing bertarget...`],
+            ['[*]', `DOMAIN: Typosquat domain didaftarkan · DNS propagasi selesai (${randInt(3, 8)} menit)`],
+            ['[*]', `TEMPLATE: Email phishing dikustomisasi (tema: keamanan akun / pembaruan sistem)`],
+            ['[*]', `WATERING HOLE: Situs jebakan online · SSL certificate valid · konten meyakinkan`],
+          ],
+        }),
+        b({
+          id: 'Lure opened', prefix: '[+]', gain: 4, tech: 'T1566', mitre: [['T1566'], 3],
+          text: () => `${randInt(2, 5)} recipients opened lure · callback received`,
+          extra: s => {
+            let done = false
+            return { payloads: s.payloads.map(p => (!done && p.status === 'LOADED' ? ((done = true), { ...p, status: 'DEPLOYED' as const }) : p)) }
+          },
+          blue: ['medium', 'Spear phishing delivered to {asset}', 'MAIL-3101'],
+          termLines: () => {
+            const n = randInt(2, 5)
+            return [
+              ['[+]', `EMAIL DELIVERY: Mengirim ${randInt(8, 25)} email phishing ke daftar target...`],
+              ['[!]', `CALLBACK: ${n} penerima membuka lure · koneksi balik diterima dari ${n} host`],
+              ['[!]', `USER-AGENT: Windows NT 10.0 · Office 365 · Chrome/${randInt(110, 120)}.0`],
+              ['[+]', `PAYLOAD: Stage-1 dropper dieksekusi pada ${n} endpoint target`],
+              ['[+]', `MITRE T1566: Spearphishing Attachment/Link — BERHASIL`],
+              ['[+]', `✓ STATUS: DELIVERY SELESAI | Payload terkirim · menunggu eksekusi`],
+            ]
+          },
+        }),
       ]
+
+    // ================================================================
+    // PELAKSANAAN — Exploit
+    // ================================================================
     case 'exploit':
       return [
-        b({ id: 'Trigger vuln', prefix: '[!]', gain: 3, tech: 'T1190', sev: 'critical', mitre: [['T1190'], 3],
-            text: t => `Triggering ${pick(CVES)} on ${t.name}`,
-            blue: ['high', 'Exploit attempt on {asset} web portal', 'IPS-7701'] }),
-        b({ id: 'Initial access', prefix: '[+]', gain: 8, tech: 'T1203', sev: 'high', mitre: [['T1203', 'T1059'], 3],
-            text: t => `Initial access gained on ${t.name} · user context svc_app`,
-            blue: ['critical', 'Remote code execution on {asset}', 'EDR-9001'] }),
+        b({
+          id: 'Trigger vuln', prefix: '[!]', gain: 3, tech: 'T1190', sev: 'critical', mitre: [['T1190'], 3],
+          text: t => `Triggering ${cve()} on ${t.name}`,
+          blue: ['high', 'Exploit attempt on {asset} web portal', 'IPS-7701'],
+          termLines: t => [
+            ['[!]', `EXPLOIT: Memicu ${cve()} pada ${t.name}...`],
+            ['[!]', `PAYLOAD: Injeksi SQL/RCE payload ke endpoint target`],
+            ['[*]', `STACK TRACE: EIP dikontrol · RIP overwritten pada offset ${randInt(128, 512)}`],
+            ['[*]', `SHELLCODE: Injeksi shellcode ${randInt(150, 350)} bytes via memory corruption`],
+            ['[!]', `RESPONSE: HTTP ${pick(['200', '500', '302'])} · eksekusi dikonfirmasi via OOB DNS`],
+          ],
+        }),
+        b({
+          id: 'Initial access', prefix: '[+]', gain: 8, tech: 'T1203', sev: 'high', mitre: [['T1203', 'T1059'], 3],
+          text: t => `Initial access gained on ${t.name} · user context svc_app`,
+          blue: ['critical', 'Remote code execution on {asset}', 'EDR-9001'],
+          termLines: t => [
+            ['[+]', `AKSES AWAL: Reverse shell terkonfirmasi dari ${t.name}`],
+            ['[+]', `CONTEXT: svc_app@${t.name.split(' ')[0].toLowerCase()} · Priv: User (UID=1001)`],
+            ['[!]', `PRIVESC CHECK: Mencari vektor eskalasi hak akses...`],
+            ['[!]', `PRIVESC: sudo misconfig ditemukan · PATH hijack tersedia`],
+            ['[+]', `MITRE T1190: Exploit Public-Facing Application — BERHASIL`],
+            ['[+]', `MITRE T1203: Exploitation for Client Execution — BERHASIL`],
+            ['[+]', `✓ STATUS: EXPLOIT SELESAI | Akses awal terkonfirmasi · pivot dimulai`],
+          ],
+        }),
       ]
+
+    // ================================================================
+    // PENGENDALIAN — Install
+    // ================================================================
     case 'install':
       return [
-        b({ id: 'Persistence', prefix: '[*]', gain: 3, tech: 'T1053', mitre: [['T1053'], 3],
-            text: t => `Writing persistence on ${t.name} (scheduled task)` }),
-        b({ id: 'Implant verified', prefix: '[+]', gain: 6, tech: 'T1547', sev: 'high', mitre: [['T1547'], 3],
-            text: () => 'Implant survives reboot · checksum OK',
-            blue: ['high', 'Persistence mechanism created on {asset}', 'EDR-8801'] }),
+        b({
+          id: 'Persistence', prefix: '[*]', gain: 3, tech: 'T1053', mitre: [['T1053'], 3],
+          text: t => `Writing persistence on ${t.name} (scheduled task)`,
+          termLines: t => [
+            ['[+]', `PENGENDALIAN: Tahap Instalasi dimulai pada ${t.name}`],
+            ['[*]', `PERSISTENCE: Menulis mekanisme persistensi tersembunyi...`],
+            ['[*]', `SCHED TASK: Membuat task "svchost_upd" (Windows) / cron @reboot (Linux)`],
+            ['[*]', `REGISTRY: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run ditambahkan`],
+            ['[*]', `STARTUP: Implant dikopi ke C:\\ProgramData\\Microsoft\\svc32.exe`],
+          ],
+        }),
+        b({
+          id: 'Implant verified', prefix: '[+]', gain: 6, tech: 'T1547', sev: 'high', mitre: [['T1547'], 3],
+          text: () => 'Implant survives reboot · checksum OK',
+          blue: ['high', 'Persistence mechanism created on {asset}', 'EDR-8801'],
+          termLines: () => [
+            ['[*]', `VERIFY: Mensimulasikan reboot · menunggu check-in pasca-restart...`],
+            ['[+]', `CHECKSUM: SHA256 OK · implant tidak termodifikasi · integritas terjaga`],
+            ['[+]', `BEACON: Koneksi perdana dari implant diterima — persistensi aktif`],
+            ['[+]', `LATERAL PREP: Mengidentifikasi kredensial tersimpan & session aktif`],
+            ['[+]', `MITRE T1053: Scheduled Task/Job — TERPASANG`],
+            ['[+]', `MITRE T1547: Boot/Logon Autostart Execution — TERPASANG`],
+            ['[+]', `✓ STATUS: INSTALASI SELESAI | Persistensi aktif · implant siap beroperasi`],
+          ],
+        }),
       ]
+
+    // ================================================================
+    // PENGENDALIAN — C2
+    // ================================================================
     case 'c2':
       return [
-        b({ id: 'Negotiate channel', prefix: '[*]', gain: 1, tech: 'T1071',
-            text: t => `Negotiating covert channel to ${t.name}` }),
-        b({ id: 'Beacon live', prefix: '[+]', team: 'C2', gain: 3, tech: 'T1071', sev: 'high', mitre: [['T1071', 'T1572'], 3],
-            text: () => 'Beacon established · jitter 20%',
-            extra: (s, t) => ({ c2Sessions: [...s.c2Sessions, newC2(t)].slice(-12) }),
-            blue: ['high', 'C2 beacon outbound from {asset}', 'NET-3301'] }),
+        b({
+          id: 'Negotiate channel', prefix: '[*]', gain: 1, tech: 'T1071',
+          text: t => `Negotiating covert channel to ${t.name}`,
+          termLines: t => [
+            ['[*]', `C2 SETUP: Menegosiasikan kanal tersembunyi ke ${t.name}...`],
+            ['[*]', `PROTOCOL TRY: HTTP/S → DNS → ICMP → TCP raw (menghindari DPI)`],
+            ['[+]', `CHANNEL: Kanal DNS-over-HTTPS terpilih · port ${randInt(443, 8443)}/tcp`],
+            ['[*]', `JITTER: Konfigurasi jitter ${randInt(15, 35)}% — menghindari deteksi beacon reguler`],
+            ['[*]', `ENCRYPT: AES-256-GCM + RSA-4096 key exchange · traffic tersamar sebagai CDN`],
+          ],
+        }),
+        b({
+          id: 'Beacon live', prefix: '[+]', team: 'C2', gain: 3, tech: 'T1071', sev: 'high', mitre: [['T1071', 'T1572'], 3],
+          text: () => 'Beacon established · jitter 20%',
+          extra: (s, t) => ({ c2Sessions: [...s.c2Sessions, newC2(t)].slice(-12) }),
+          blue: ['high', 'C2 beacon outbound from {asset}', 'NET-3301'],
+          termLines: () => [
+            ['[+]', `C2 LIVE: Beacon terkonfirmasi · kanal dua-arah aktif`],
+            ['[*]', `INTERVAL: Check-in setiap ${randInt(15, 60)} detik ± jitter`],
+            ['[*]', `LATERAL: Memindai jaringan internal untuk target pivot...`],
+            ['[+]', `PIVOT TARGET: ${randInt(3, 12)} host internal teridentifikasi · SMB/RDP tersedia`],
+            ['[!]', `DOMAIN ADMIN: Token high-priv terdeteksi — eskalasi ke SYSTEM dimulai`],
+            ['[+]', `MITRE T1071: Application Layer Protocol — AKTIF`],
+            ['[+]', `MITRE T1572: Protocol Tunneling — AKTIF`],
+            ['[+]', `✓ STATUS: C2 SELESAI | Kendali penuh · lateral movement dimulai`],
+          ],
+        }),
       ]
+
+    // ================================================================
+    // PENCAPAIAN — Exfil
+    // ================================================================
     case 'exfil':
       return [
-        b({ id: 'Collect data', prefix: '[*]', gain: 3, tech: 'T1005',
-            text: t => `Collecting archives from file shares of ${t.name}` }),
-        b({ id: 'Exfil stream', prefix: '[+]', gain: 8, tech: 'T1041', sev: 'critical', mitre: [['T1041', 'T1567'], 4],
-            text: () => 'Exfil stream opened → dropzone',
-            extra: (s, t) => {
-              const sets: ExfilDataset[] = [0, 1].map(() => ({
-                id: uid('ds'), targetId: t.id, name: pick(DATASETS), sizeMB: randInt(30, 150), transferredMB: 0, status: 'in-progress' as const,
-              }))
-              return { exfilDatasets: [...s.exfilDatasets, ...sets].slice(-40) }
-            },
-            blue: ['critical', 'Exfil attempt — {size}MB via DNS on {asset}', 'DLP-5601'] }),
+        b({
+          id: 'Collect data', prefix: '[*]', gain: 3, tech: 'T1005',
+          text: t => `Collecting archives from file shares of ${t.name}`,
+          termLines: t => [
+            ['[+]', `PENCAPAIAN: Tahap Eksfiltrasi dimulai pada ${t.name}`],
+            ['[*]', `DISCOVERY: Mengidentifikasi file & database bernilai tinggi...`],
+            ['[*]', `FILE SCAN: ${randInt(1200, 8000)} file dipindai · ${randInt(50, 300)} file bernilai ditemukan`],
+            ['[*]', `STAGING: Mengumpulkan arsip dari file shares · database dump dimulai`],
+            ['[*]', `COMPRESS: Mengompresi data (${randInt(200, 800)}MB → ${randInt(80, 200)}MB) · enkripsi AES-256`],
+          ],
+        }),
+        b({
+          id: 'Exfil stream', prefix: '[+]', gain: 8, tech: 'T1041', sev: 'critical', mitre: [['T1041', 'T1567'], 4],
+          text: () => 'Exfil stream opened → dropzone',
+          extra: (s, t) => {
+            const sets: ExfilDataset[] = [0, 1].map(() => ({
+              id: uid('ds'), targetId: t.id, name: pick(DATASETS), sizeMB: randInt(30, 150), transferredMB: 0, status: 'in-progress' as const,
+            }))
+            return { exfilDatasets: [...s.exfilDatasets, ...sets].slice(-40) }
+          },
+          blue: ['critical', 'Exfil attempt — {size}MB via DNS on {asset}', 'DLP-5601'],
+          termLines: () => {
+            const mb = randInt(80, 350)
+            const d1 = pick(DATASETS); const d2 = pick(DATASETS)
+            return [
+              ['[+]', `EXFIL: Membuka stream eksfiltrasi ke dropzone C2...`],
+              ['[!]', `TRANSFER: ${mb}MB data dikirim via DNS tunneling · throughput ${randInt(50, 200)}KB/s`],
+              ['[!]', `DATASET: ${d1} · ${d2} · vpn_creds.kdbx`],
+              ['[!]', `PAYLOAD: Kredensial · rencana infrastruktur · data transaksi keuangan`],
+              ['[+]', `COVER: Traffic disamar sebagai DNS query normal · NX domain chain`],
+              ['[+]', `MITRE T1005: Data from Local System — BERHASIL`],
+              ['[+]', `MITRE T1041: Exfiltration Over C2 Channel — BERHASIL`],
+              ['[+]', `✓ STATUS: EKSFILTRASI SELESAI | ${mb}MB data dieksfiltrasi · misi tercapai`],
+            ]
+          },
+        }),
       ]
   }
 }
